@@ -35,6 +35,10 @@ WORKERS = prometheus_client.Gauge(
     'celery_workers', 'Number of alive workers')
 LATENCY = prometheus_client.Histogram(
     'celery_task_latency', 'Seconds between a task is received and started.')
+QUEUE_SIZE = prometheus_client.Gauge(
+    'celery_queue_size', 'Size of celery queue',
+    ['name']
+)
 
 
 class MonitorThread(threading.Thread):
@@ -160,6 +164,49 @@ class WorkerMonitoringThread(threading.Thread):
             self.log.exception("Error while pinging workers")
 
 
+class QueuesSizeThread(threading.Thread):
+    periodicity_seconds = 10
+
+    def __init__(self, app=None, *args, **kwargs):  # pragma: no cover
+        self._app = app
+        self.log = logging.getLogger('queue-size')
+        super(QueuesSizeThread, self).__init__(*args, **kwargs)
+
+    def run(self):  # pragma: no cover
+        while True:
+            try:
+                self.update_queues_size()
+            except Exception as exc:
+                self.log.exception("Error while trying to update queues size")
+            time.sleep(self.periodicity_seconds)
+
+    def update_queues_size(self):
+        queue_names = self.get_queue_names()
+        queue_sizes = self.get_queue_sizes(queue_names)
+
+        for name, size in zip(queue_names, queue_sizes):
+            QUEUE_SIZE.labels(name=name).set(size)
+
+    def get_queue_names(self):
+        active_queues = self._app.control.inspect().active_queues().values()
+
+        names = []
+        for node in active_queues:
+            for queue in node:
+                names.append(queue['name'])
+
+        return names
+
+    def get_queue_sizes(self, names):
+        with self._app.connection_or_acquire() as connection:
+            with connection.default_channel.conn_or_acquire() as redis:
+                with redis.pipeline() as pipe:
+                    for name in names:
+                        pipe.llen(name)
+
+                    return pipe.execute()
+
+
 class EnableEventsThread(threading.Thread):
     periodicity_seconds = 5
 
@@ -179,6 +226,7 @@ class EnableEventsThread(threading.Thread):
     def enable_events(self):
         self._app.control.enable_events()
 
+
 def setup_metrics(app):
     """
     This initializes the available metrics with default values so that
@@ -186,7 +234,9 @@ def setup_metrics(app):
     """
     WORKERS.set(0)
     try:
-        registered_tasks = app.control.inspect().registered_tasks().values()
+        inspect = app.control.inspect()
+        registered_tasks = inspect.registered_tasks().values()
+        active_queues = inspect.active_queues().values()
     except Exception:  # pragma: no cover
         for metric in TASKS.collect():
             for name, labels, cnt in metric.samples:
@@ -194,11 +244,18 @@ def setup_metrics(app):
         for metric in TASKS_NAME.collect():
             for name, labels, cnt in metric.samples:
                 TASKS_NAME.labels(**labels).set(0)
+        for metric in QUEUE_SIZE.collect():
+            for name, labels, cnt in metric.samples:
+                QUEUE_SIZE.labels(**labels).set(0)
     else:
         for state in celery.states.ALL_STATES:
             TASKS.labels(state=state).set(0)
             for task_name in set(chain.from_iterable(registered_tasks)):
                 TASKS_NAME.labels(state=state, name=task_name).set(0)
+
+        for node in active_queues:
+            for queue in node:
+                QUEUE_SIZE.labels(name=queue['name']).set(0)
 
 
 def start_httpd(addr):  # pragma: no cover
@@ -280,17 +337,26 @@ def main():  # pragma: no cover
     t = MonitorThread(app=app, max_tasks_in_memory=opts.max_tasks_in_memory)
     t.daemon = True
     t.start()
+
     w = WorkerMonitoringThread(app=app)
     w.daemon = True
     w.start()
+
+    q = QueuesSizeThread(app=app)
+    q.daemon = True
+    q.start()
+
     e = None
     if opts.enable_events:
         e = EnableEventsThread(app=app)
         e.daemon = True
         e.start()
+
     start_httpd(opts.addr)
+
     t.join()
     w.join()
+    q.join()
     if e is not None:
         e.join()
 
