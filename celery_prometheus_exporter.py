@@ -39,6 +39,10 @@ QUEUE_SIZE = prometheus_client.Gauge(
     'celery_queue_size', 'Size of celery queue',
     ['name']
 )
+QUEUE_TASKS = prometheus_client.Gauge(
+    'celery_queue_tasks', 'Number of tasks in queue',
+    ['name', 'task']
+)
 
 
 class MonitorThread(threading.Thread):
@@ -164,28 +168,31 @@ class WorkerMonitoringThread(threading.Thread):
             self.log.exception("Error while pinging workers")
 
 
-class QueuesSizeThread(threading.Thread):
-    periodicity_seconds = 10
+class QueueMonitoringThread(threading.Thread):
+    periodicity_seconds = 15
 
     def __init__(self, app=None, *args, **kwargs):  # pragma: no cover
         self._app = app
         self.log = logging.getLogger('queue-size')
-        super(QueuesSizeThread, self).__init__(*args, **kwargs)
+        super(QueueMonitoringThread, self).__init__(*args, **kwargs)
 
     def run(self):  # pragma: no cover
         while True:
             try:
-                self.update_queues_size()
+                self.update_queues_metrics()
             except Exception as exc:
                 self.log.exception("Error while trying to update queues size")
             time.sleep(self.periodicity_seconds)
 
-    def update_queues_size(self):
+    def update_queues_metrics(self):
         queue_names = self.get_queue_names()
-        queue_sizes = self.get_queue_sizes(queue_names)
+        queues = self.get_queues(queue_names)
 
-        for name, size in zip(queue_names, queue_sizes):
-            QUEUE_SIZE.labels(name=name).set(size)
+        for queue_name, (size, tasks) in zip(queue_names, chunks(queues, 2)):
+            QUEUE_SIZE.labels(name=queue_name).set(size)
+
+            for task_name, count in self.get_tasks_stat(tasks).items():
+                QUEUE_TASKS.labels(name=queue_name, task=task_name).set(count)
 
     def get_queue_names(self):
         active_queues = self._app.control.inspect().active_queues().values()
@@ -197,14 +204,28 @@ class QueuesSizeThread(threading.Thread):
 
         return names
 
-    def get_queue_sizes(self, names):
+    def get_queues(self, names):
         with self._app.connection_or_acquire() as connection:
-            with connection.default_channel.conn_or_acquire() as redis:
-                with redis.pipeline() as pipe:
-                    for name in names:
-                        pipe.llen(name)
+            redis = connection.default_channel.client
 
-                    return pipe.execute()
+            with redis.pipeline() as pipe:
+                for name in names:
+                    pipe.llen(name)
+                    pipe.lrange(name, 0, -1)
+
+                return pipe.execute()
+
+    def get_tasks_stat(self, tasks):
+        name2count = collections.defaultdict(int)
+        for task in tasks:
+            try:
+                task_json = json.loads(task)
+            except json.decoder.JSONDecodeError:
+                continue
+
+            if 'headers' in task_json and 'task' in task_json['headers']:
+                name2count[task_json['headers']['task']] += 1
+        return name2count
 
 
 class EnableEventsThread(threading.Thread):
@@ -256,6 +277,11 @@ def setup_metrics(app):
         for node in active_queues:
             for queue in node:
                 QUEUE_SIZE.labels(name=queue['name']).set(0)
+
+
+def chunks(l, n):
+    for i in range(0, len(l), n):
+        yield l[i:i + n]
 
 
 def start_httpd(addr):  # pragma: no cover
@@ -342,7 +368,7 @@ def main():  # pragma: no cover
     w.daemon = True
     w.start()
 
-    q = QueuesSizeThread(app=app)
+    q = QueueMonitoringThread(app=app)
     q.daemon = True
     q.start()
 
