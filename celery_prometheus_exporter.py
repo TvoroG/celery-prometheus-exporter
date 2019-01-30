@@ -259,15 +259,9 @@ def setup_metrics(app):
         registered_tasks = inspect.registered_tasks().values()
         active_queues = inspect.active_queues().values()
     except Exception:  # pragma: no cover
-        for metric in TASKS.collect():
-            for name, labels, cnt in metric.samples:
-                TASKS.labels(**labels).set(0)
-        for metric in TASKS_NAME.collect():
-            for name, labels, cnt in metric.samples:
-                TASKS_NAME.labels(**labels).set(0)
-        for metric in QUEUE_SIZE.collect():
-            for name, labels, cnt in metric.samples:
-                QUEUE_SIZE.labels(**labels).set(0)
+        _reset_metrics(TASKS)
+        _reset_metrics(TASKS_NAME)
+        _reset_metrics(QUEUE_SIZE)
     else:
         for state in celery.states.ALL_STATES:
             TASKS.labels(state=state).set(0)
@@ -277,6 +271,14 @@ def setup_metrics(app):
         for node in active_queues:
             for queue in node:
                 QUEUE_SIZE.labels(name=queue['name']).set(0)
+
+    _reset_metrics(QUEUE_TASKS)
+
+
+def _reset_metrics(metrics):
+    for metric in metrics.collect():
+        for _, labels, _ in metric.samples:
+            metrics.labels(**labels).set(0)
 
 
 def chunks(l, n):
