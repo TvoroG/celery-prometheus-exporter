@@ -179,6 +179,9 @@ class QueueMonitoringThread(threading.Thread):
     def run(self):  # pragma: no cover
         while True:
             try:
+                _reset_metrics(QUEUE_SIZE)
+                _reset_metrics(QUEUE_TASKS)
+
                 self.update_queues_metrics()
             except Exception as exc:
                 self.log.exception("Error while trying to update queues size")
