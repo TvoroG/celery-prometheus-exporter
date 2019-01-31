@@ -264,18 +264,11 @@ def setup_metrics(app):
     except Exception:  # pragma: no cover
         _reset_metrics(TASKS)
         _reset_metrics(TASKS_NAME)
-        _reset_metrics(QUEUE_SIZE)
     else:
         for state in celery.states.ALL_STATES:
             TASKS.labels(state=state).set(0)
             for task_name in set(chain.from_iterable(registered_tasks)):
                 TASKS_NAME.labels(state=state, name=task_name).set(0)
-
-        for node in active_queues:
-            for queue in node:
-                QUEUE_SIZE.labels(name=queue['name']).set(0)
-
-    _reset_metrics(QUEUE_TASKS)
 
 
 def _reset_metrics(metrics):
