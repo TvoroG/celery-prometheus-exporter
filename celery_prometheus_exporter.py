@@ -274,7 +274,7 @@ def setup_metrics(app):
 def _reset_metrics(metrics):
     for metric in metrics.collect():
         for _, labels, _ in metric.samples:
-            metric.labels(**labels).set(0)
+            metrics.labels(**labels).set(0)
 
 
 def chunks(l, n):
