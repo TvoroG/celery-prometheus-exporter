@@ -179,8 +179,8 @@ class QueueMonitoringThread(threading.Thread):
     def run(self):  # pragma: no cover
         while True:
             try:
-                _reset_metrics(QUEUE_SIZE)
-                _reset_metrics(QUEUE_TASKS)
+                _reset_metrics(QUEUE_SIZE, log=self.log)
+                _reset_metrics(QUEUE_TASKS, log=self.log)
 
                 self.update_queues_metrics()
             except Exception as exc:
@@ -271,9 +271,11 @@ def setup_metrics(app):
                 TASKS_NAME.labels(state=state, name=task_name).set(0)
 
 
-def _reset_metrics(metrics):
+def _reset_metrics(metrics, log=None):
     for metric in metrics.collect():
-        print(metric.samples)
+        if log:
+            log.exception("metrics: {}".format(metric.samples))
+
         for name, labels, cnt in metric.samples:
             metrics.labels(**labels).set(0)
 
