@@ -193,11 +193,11 @@ class QueueMonitoringThread(threading.Thread):
 
         for queue_name, (size, tasks) in zip(queue_names, chunks(queues, 2)):
             QUEUE_SIZE.labels(name=queue_name).set(size)
-            known_queues.add({'name': queue_name})
+            known_queues.add(queue_name)
 
             for task_name, count in self.get_tasks_stat(tasks).items():
                 QUEUE_TASKS.labels(name=queue_name, task=task_name).set(count)
-                known_tasks.add({'name': queue_name, 'task': task_name})
+                known_tasks.add((queue_name, task_name))
 
         _reset_metrics(QUEUE_SIZE, known_queues)
         _reset_metrics(QUEUE_TASKS, known_tasks)
@@ -279,7 +279,12 @@ def setup_metrics(app):
 def _reset_metrics(metrics, known_labels=None):
     for metric in metrics.collect():
         for sample in metric.samples:
-            if known_labels is None or sample.labels not in known_labels:
+            if known_labels is not None:
+                labels = tuple(sample.labels[label] for label in metrics._labelnames)
+
+                if labels not in known_labels:
+                    metrics.labels(**sample.labels).set(0)
+            else:
                 metrics.labels(**sample.labels).set(0)
 
 
