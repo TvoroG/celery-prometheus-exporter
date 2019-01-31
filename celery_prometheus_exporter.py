@@ -179,9 +179,6 @@ class QueueMonitoringThread(threading.Thread):
     def run(self):  # pragma: no cover
         while True:
             try:
-                _reset_metrics(QUEUE_SIZE)
-                _reset_metrics(QUEUE_TASKS)
-
                 self.update_queues_metrics()
             except Exception as exc:
                 self.log.exception("Error while trying to update queues size")
@@ -191,11 +188,19 @@ class QueueMonitoringThread(threading.Thread):
         queue_names = self.get_queue_names()
         queues = self.get_queues(queue_names)
 
+        known_queues = set([])
+        known_tasks = set([])
+
         for queue_name, (size, tasks) in zip(queue_names, chunks(queues, 2)):
             QUEUE_SIZE.labels(name=queue_name).set(size)
+            known_queues.add({'name': queue_name})
 
             for task_name, count in self.get_tasks_stat(tasks).items():
                 QUEUE_TASKS.labels(name=queue_name, task=task_name).set(count)
+                known_tasks.add({'name': queue_name, 'task': task_name})
+
+        _reset_metrics(QUEUE_SIZE, known_queues)
+        _reset_metrics(QUEUE_TASKS, known_tasks)
 
     def get_queue_names(self):
         active_queues = self._app.control.inspect().active_queues().values()
@@ -271,10 +276,11 @@ def setup_metrics(app):
                 TASKS_NAME.labels(state=state, name=task_name).set(0)
 
 
-def _reset_metrics(metrics):
+def _reset_metrics(metrics, known_labels=None):
     for metric in metrics.collect():
         for sample in metric.samples:
-            metrics.labels(**sample.labels).set(0)
+            if known_labels is None or sample.labels not in known_labels:
+                metrics.labels(**sample.labels).set(0)
 
 
 def chunks(l, n):
