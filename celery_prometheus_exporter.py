@@ -193,7 +193,7 @@ class QueueMonitoringThread(threading.Thread):
 
         for queue_name, (size, tasks) in zip(queue_names, chunks(queues, 2)):
             QUEUE_SIZE.labels(name=queue_name).set(size)
-            known_queues.add(queue_name)
+            known_queues.add((queue_name,))
 
             for task_name, count in self.get_tasks_stat(tasks).items():
                 QUEUE_TASKS.labels(name=queue_name, task=task_name).set(count)
