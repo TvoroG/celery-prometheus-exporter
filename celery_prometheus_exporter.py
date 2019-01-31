@@ -273,7 +273,7 @@ def setup_metrics(app):
 
 def _reset_metrics(metrics):
     for metric in metrics.collect():
-        for _, labels, _ in metric.samples:
+        for name, labels, cnt in metric.samples:
             metrics.labels(**labels).set(0)
 
 
